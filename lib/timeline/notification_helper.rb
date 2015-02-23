@@ -1,21 +1,23 @@
 module Timeline
 
-  module ControllerHelper
+  module NotificationHelper
     def self.included(base)
       base.send :include, InstanceMethods
     end
 
     module InstanceMethods
-      def track_timeline_activity(name, options={})
+      def track_notification(name, options={})
         @name = name
-        @start_value = 0
-        @limit_records = options.delete(:limit_records) || -1
+        # @start_value = 0
+        # @limit_records = options.delete(:limit_records) || -1
         @actor = options.delete :actor
         @actor ||= :creator
         @object = options.delete :object
         @target = options.delete :target
-        @followers = options.delete :followers
+        # @followers = options.delete :followers
         @mentionable = options.delete :mentionable
+
+        @read = options[:read]
 
         @fields_for = {}
         @extra_fields ||= nil
@@ -23,6 +25,13 @@ module Timeline
         options[:verb] = name
 
         add_activity(activity(verb: options[:verb]))
+      end
+
+      def set_as_read_notification(user, read, options= {})
+      	notifications = get_unread_notification(user, options)
+      	notifications.each do |index, notification|
+      		$redis.lset("user:id:#{user.id}:notification",index, encode(reset_read_activity(notification, read)))
+    	  end
       end
 
       # track_timeline_activity(:new_coupon,actor: :user,object: :coupon_code,followers: :followers)
@@ -40,25 +49,25 @@ module Timeline
       end
 
       def add_activity(activity_item)
-        redis_add "global:activity", activity_item
-        redis_add "global:activity:#{activity_item[:verb]}", activity_item
-        add_activity_to_user(activity_item[:actor][:id], activity_item)
-        add_activity_by_user(activity_item[:actor][:id], activity_item)
+        # redis_add "global:activity", activity_item
+        # redis_add "global:activity:#{activity_item[:verb]}", activity_item
+        add_notification_to_user(activity_item[:actor][:id], activity_item)
+        # add_activity_by_user(activity_item[:actor][:id], activity_item)
         add_mentions(activity_item)
-        add_activity_to_followers(activity_item) if @followers.any?
+        # add_activity_to_followers(activity_item) if @followers.any?
       end
 
-      def add_activity_by_user(user_id, activity_item)
-        redis_add "user:id:#{user_id}:posts", activity_item
+      # def add_activity_by_user(user_id, activity_item)
+      #   redis_add "user:id:#{user_id}:posts", activity_item
+      # end
+
+      def add_notification_to_user(user_id, activity_item)
+        redis_add "user:id:#{user_id}:notification", activity_item
       end
 
-      def add_activity_to_user(user_id, activity_item)
-        redis_add "user:id:#{user_id}:activity", activity_item
-      end
-
-      def add_activity_to_followers(activity_item)
-        @followers.each { |follower| add_activity_to_user(follower.id, activity_item) }
-      end
+      # def add_activity_to_followers(activity_item)
+      #   @followers.each { |follower| add_activity_to_user(follower.id, activity_item) }
+      # end
 
       def add_mentions(activity_item)
         return unless @mentionable and @object.send(@mentionable)
@@ -109,6 +118,27 @@ module Timeline
           self
         end
       end
+
+      def get_unread_notification(user, options= {})
+        result = {}
+        $redis.lrange("user:id:#{user.id}:notification", options[:start] || 0, options[:end] || 10).each_with_index do |item, index|
+          data = Notification::Activity.new(decode(item))
+          result.merge!(index => data) unless data.read
+        end
+        result
+      end
+
+      def reset_read_activity(activity, read)
+      	{
+      		type: activity.type,
+      		content: activity.content,
+      		object: activity.object,
+      		created_by: activity.created_by,
+      		created_at: activity.created_at,
+      		read: read
+      	}
+      end
+
     end
   end
 
